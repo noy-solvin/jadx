@@ -399,6 +399,14 @@ public final class SwitchRegionMaker {
 		DepthRegionTraversal.traverse(mth, caseContainer, new AbstractRegionVisitor() {
 			@Override
 			public void leaveRegion(MethodNode mth, IRegion region) {
+				// Issue #2979: Guard against non-Region containers (e.g. unmodifiable sub-block lists)
+				if (!(region instanceof Region)) {
+					return;
+				}
+				// Issue #2979: Do not insert switch breaks inside nested loops
+				if (isInsideLoop(region, switchRegion)) {
+					return;
+				}
 				boolean insertBreak = false;
 				if (region == caseContainer) {
 					// top region
@@ -416,10 +424,21 @@ public final class SwitchRegionMaker {
 					}
 				}
 				if (insertBreak && canAppendBreak(region)) {
-					region.getSubBlocks().add(buildBreakContainer(switchRegion));
+					((Region) region).add(buildBreakContainer(switchRegion));
 				}
 			}
 		});
+	}
+
+	private static boolean isInsideLoop(IRegion region, SwitchRegion switchRegion) {
+		IRegion cur = region;
+		while (cur != null && cur != switchRegion) {
+			if (cur instanceof jadx.core.dex.regions.loops.LoopRegion) {
+				return true;
+			}
+			cur = cur.getParent();
+		}
+		return false;
 	}
 
 	public static boolean canAppendBreak(IRegion region) {

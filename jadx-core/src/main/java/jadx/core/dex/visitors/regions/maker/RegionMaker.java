@@ -32,8 +32,12 @@ public class RegionMaker {
 	private final LoopRegionMaker loopMaker;
 
 	private final BlockSet processedBlocks;
+	private final int[] blockDupCount;
 	private final int regionsLimit;
 
+	private static final int MAX_BLOCK_DUPLICATIONS = 5;
+	private static final int MAX_REGION_DEPTH = 300;
+	private int makeRegionDepth;
 	private int regionsCount;
 
 	public RegionMaker(MethodNode mth) {
@@ -42,6 +46,7 @@ public class RegionMaker {
 		this.ifMaker = new IfRegionMaker(mth, this);
 		this.loopMaker = new LoopRegionMaker(mth, this, ifMaker);
 		this.processedBlocks = BlockSet.empty(mth);
+		this.blockDupCount = new int[mth.getBasicBlocks().size()];
 		this.regionsLimit = mth.getBasicBlocks().size() * 400;
 	}
 
@@ -56,21 +61,46 @@ public class RegionMaker {
 			insertEdgeInsns(region, startBlock);
 			return region;
 		}
+		// Issue #2979: Guard against unbounded recursion depth in irreducible control flow
+		if (makeRegionDepth > MAX_REGION_DEPTH) {
+			mth.addWarnComment("Max region recursion depth reached at block " + startBlock);
+			return region;
+		}
 		if (processedBlocks.addChecked(startBlock)) {
-			// Add block to multiple regions (duplicate the instructions in decompiled code)
-			// and allow processing to continue
+			// Issue #2979: Bound block duplications to prevent infinite duplication loops
+			int pos = startBlock.getPos();
+			if (pos >= 0 && pos < blockDupCount.length) {
+				if (++blockDupCount[pos] > MAX_BLOCK_DUPLICATIONS) {
+					mth.addWarnComment("Duplication limit reached for block: " + startBlock);
+					return region;
+				}
+			}
 			if (!startBlock.contains(AFlag.DUPLICATED)) {
 				mth.addWarnComment("Code duplicated, block: " + startBlock + ' ' + startBlock.getAttributesString());
 				startBlock.add(AFlag.DUPLICATED);
 			}
 		}
-		BlockNode next = startBlock;
-		while (next != null) {
-			next = traverse(region, next);
-			regionsCount++;
-			if (regionsCount > regionsLimit) {
-				throw new JadxOverflowException("Regions count limit reached at block " + startBlock);
+		makeRegionDepth++;
+		try {
+			BlockSet visited = BlockSet.empty(mth);
+			visited.add(startBlock);
+			BlockNode next = startBlock;
+			while (next != null) {
+				next = traverse(region, next);
+				if (next != null) {
+					// Issue #2979: Guard against cyclic transitions in sequential region traversal
+					if (visited.addChecked(next)) {
+						mth.addWarnComment("Cycle detected in region at block: " + next);
+						break;
+					}
+				}
+				regionsCount++;
+				if (regionsCount > regionsLimit) {
+					throw new JadxOverflowException("Regions count limit reached at block " + startBlock);
+				}
 			}
+		} finally {
+			makeRegionDepth--;
 		}
 		return region;
 	}
@@ -164,5 +194,10 @@ public class RegionMaker {
 
 	void clearBlockProcessedState(BlockNode block) {
 		processedBlocks.remove(block);
+		// Issue #2979: Reset duplication counter so LoopRegionMaker retains full loop bodies
+		int pos = block.getPos();
+		if (pos >= 0 && pos < blockDupCount.length) {
+			blockDupCount[pos] = 0;
+		}
 	}
 }

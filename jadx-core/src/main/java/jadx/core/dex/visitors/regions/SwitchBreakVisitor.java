@@ -19,6 +19,7 @@ import jadx.core.dex.nodes.IContainer;
 import jadx.core.dex.nodes.IRegion;
 import jadx.core.dex.nodes.InsnNode;
 import jadx.core.dex.nodes.MethodNode;
+import jadx.core.dex.regions.Region;
 import jadx.core.dex.regions.SwitchRegion;
 import jadx.core.dex.visitors.AbstractVisitor;
 import jadx.core.dex.visitors.JadxVisitor;
@@ -67,7 +68,8 @@ public class SwitchBreakVisitor extends AbstractVisitor {
 
 		private void processBranchRegion(MethodNode mth, IRegion region) {
 			IRegion parentRegion = region.getParent();
-			if (parentRegion.contains(AFlag.FALL_THROUGH)) {
+			// Issue #2979: Verify parentRegion is a valid mutable Region and not fall-through
+			if (parentRegion == null || !(parentRegion instanceof Region) || parentRegion.contains(AFlag.FALL_THROUGH)) {
 				// fallthrough case, can't extract break
 				return;
 			}
@@ -207,11 +209,17 @@ public class SwitchBreakVisitor extends AbstractVisitor {
 		public void leaveRegion(MethodNode mth, IRegion region) {
 			if (addBreakRegion.contains(region)) {
 				addBreakRegion.remove(region);
-				region.getSubBlocks().add(SwitchRegionMaker.buildBreakContainer(currentSwitch));
+				// Issue #2979: Guard against non-Region containers
+				if (region instanceof Region) {
+					((Region) region).add(SwitchRegionMaker.buildBreakContainer(currentSwitch));
+				}
 			}
 			if (cleanupSet.contains(region)) {
 				cleanupSet.remove(region);
-				region.getSubBlocks().removeIf(r -> r.contains(AFlag.REMOVE));
+				// Issue #2979: Guard against unmodifiable sub-block lists
+				if (region instanceof Region) {
+					region.getSubBlocks().removeIf(r -> r.contains(AFlag.REMOVE));
+				}
 			}
 		}
 
